@@ -28,11 +28,6 @@ from Crypto.Cipher import AES, ARC4, DES
 from Crypto.Util.Padding import pad, unpad
 
 
-# Core configuration parameters
-PBKDF2_ROUNDS = 100_000
-DEFAULT_SALT_LEN = 16
-
-
 def _coerce_bytes(key: bytes | str) -> bytes:
     """Coerce hex string or raw bytes into bytes."""
     if isinstance(key, str):
@@ -65,7 +60,7 @@ def hash_password(password: str, salt_hex: Optional[str] = None) -> Dict[str, st
         "sha256",
         password.encode("utf-8"),
         salt_bytes,
-        PBKDF2_ROUNDS
+        100_000
     )
     return {
         "salt_hex": salt_hex,
@@ -82,7 +77,7 @@ def verify_password(password: str, salt_hex: str, expected_hash_hex: str) -> boo
         "sha256",
         password.encode("utf-8"),
         bytes.fromhex(salt_hex),
-        PBKDF2_ROUNDS
+        100_000
     ).hex()
     return hmac.compare_digest(computed, expected_hash_hex)
 
@@ -115,7 +110,7 @@ def derive_kek(password: str, kdf_salt_hex: str) -> bytes:
         "sha256",
         password.encode("utf-8"),
         bytes.fromhex(kdf_salt_hex),
-        PBKDF2_ROUNDS
+        100_000
     )
 
 
@@ -177,7 +172,217 @@ def unwrap_dek_bundle(wrapped_bundle_json: str, password: str, kdf_salt_hex: str
         raise ValueError("Invalid password or corrupted key bundle") from e
 
 
+def encrypt_aes(
+    plaintext: bytes,
+    aes_key: bytes | str,
+    hmac_key: bytes | str,
+    aad: bytes = b""
+) -> Dict[str, Any]:
+    """
+    Encrypts plaintext with AES-256-CBC and appends an HMAC-SHA256 over (IV || Ciphertext || AAD).
+
+    Returns detailed operational and size metrics for comparative evaluation.
+    """
+    k_aes = _coerce_bytes(aes_key)
+    k_hmac = _coerce_bytes(hmac_key)
+    iv = os.urandom(16)
+
+    t0 = time.perf_counter_ns()
+    cipher = AES.new(k_aes, AES.MODE_CBC, iv=iv)
+    padded_pt = pad(plaintext, 16)
+    ciphertext = cipher.encrypt(padded_pt)
+    mac = hmac.new(k_hmac, iv + ciphertext + aad, hashlib.sha256).digest()
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    return {
+        "cipher": "AES-256-CBC",
+        "iv_b64": base64.b64encode(iv).decode("ascii"),
+        "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+        "hmac_b64": base64.b64encode(mac).decode("ascii"),
+        "plaintext_size": len(plaintext),
+        "ciphertext_size": len(ciphertext),
+        "iv_size": 16,
+        "mac_size": 32,
+        "block_plus_iv_size": len(ciphertext) + 16,
+        "total_protected_size": len(ciphertext) + 16 + 32,
+        "padding_bytes": len(ciphertext) - len(plaintext),
+        "encrypt_ms": round(elapsed_ms, 4)
+    }
 
 
-# TODO: Implement symmetric block ciphers and stream ciphers
+def decrypt_aes(
+    payload: Dict[str, Any],
+    aes_key: bytes | str,
+    hmac_key: bytes | str,
+    aad: bytes = b""
+) -> Tuple[bytes, float]:
+    """
+    Verifies HMAC-SHA256 over (IV || Ciphertext || AAD) first, then decrypts AES-256-CBC
+    and unpads PKCS#7.
+
+    Raises:
+        ValueError if HMAC verification fails or ciphertext is tampered with.
+    """
+    k_aes = _coerce_bytes(aes_key)
+    k_hmac = _coerce_bytes(hmac_key)
+
+    iv = base64.b64decode(payload["iv_b64"])
+    ciphertext = base64.b64decode(payload["ciphertext_b64"])
+    mac = base64.b64decode(payload["hmac_b64"])
+
+    t0 = time.perf_counter_ns()
+    expected_mac = hmac.new(k_hmac, iv + ciphertext + aad, hashlib.sha256).digest()
+    if not hmac.compare_digest(mac, expected_mac):
+        raise ValueError("AES Integrity Check Failed: HMAC mismatch (ciphertext or AAD tampered)")
+
+    cipher = AES.new(k_aes, AES.MODE_CBC, iv=iv)
+    decrypted_padded = cipher.decrypt(ciphertext)
+    try:
+        plaintext = unpad(decrypted_padded, 16)
+    except Exception as e:
+        raise ValueError("AES Decryption Failed: Invalid padding") from e
+
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+    return plaintext, round(elapsed_ms, 4)
+
+
+def encrypt_des(
+    plaintext: bytes,
+    des_key: bytes | str,
+    hmac_key: bytes | str,
+    aad: bytes = b""
+) -> Dict[str, Any]:
+    """
+    Encrypts plaintext with 64-bit DES-CBC (ANSI X9.8 / ISO 8583 legacy standard)
+    and appends an HMAC-SHA256 over (IV || Ciphertext || AAD).
+    """
+    k_des = _coerce_bytes(des_key)
+    k_hmac = _coerce_bytes(hmac_key)
+    iv = os.urandom(8)  # 64-bit block size
+
+    t0 = time.perf_counter_ns()
+    cipher = DES.new(k_des, DES.MODE_CBC, iv=iv)
+    padded_pt = pad(plaintext, 8)
+    ciphertext = cipher.encrypt(padded_pt)
+    mac = hmac.new(k_hmac, iv + ciphertext + aad, hashlib.sha256).digest()
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    return {
+        "cipher": "DES-CBC",
+        "iv_b64": base64.b64encode(iv).decode("ascii"),
+        "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+        "hmac_b64": base64.b64encode(mac).decode("ascii"),
+        "plaintext_size": len(plaintext),
+        "ciphertext_size": len(ciphertext),
+        "iv_size": 8,
+        "mac_size": 32,
+        "block_plus_iv_size": len(ciphertext) + 8,
+        "total_protected_size": len(ciphertext) + 8 + 32,
+        "padding_bytes": len(ciphertext) - len(plaintext),
+        "encrypt_ms": round(elapsed_ms, 4)
+    }
+
+
+def decrypt_des(
+    payload: Dict[str, Any],
+    des_key: bytes | str,
+    hmac_key: bytes | str,
+    aad: bytes = b""
+) -> Tuple[bytes, float]:
+    """
+    Verifies HMAC-SHA256 over (IV || Ciphertext || AAD) first, then decrypts DES-CBC
+    and unpads PKCS#7 (8-byte block).
+
+    Raises:
+        ValueError if HMAC verification fails or ciphertext is tampered with.
+    """
+    k_des = _coerce_bytes(des_key)
+    k_hmac = _coerce_bytes(hmac_key)
+
+    iv = base64.b64decode(payload["iv_b64"])
+    ciphertext = base64.b64decode(payload["ciphertext_b64"])
+    mac = base64.b64decode(payload["hmac_b64"])
+
+    t0 = time.perf_counter_ns()
+    expected_mac = hmac.new(k_hmac, iv + ciphertext + aad, hashlib.sha256).digest()
+    if not hmac.compare_digest(mac, expected_mac):
+        raise ValueError("DES Integrity Check Failed: HMAC mismatch")
+
+    cipher = DES.new(k_des, DES.MODE_CBC, iv=iv)
+    decrypted_padded = cipher.decrypt(ciphertext)
+    try:
+        plaintext = unpad(decrypted_padded, 8)
+    except Exception as e:
+        raise ValueError("DES Decryption Failed: Invalid padding") from e
+
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+    return plaintext, round(elapsed_ms, 4)
+
+
+def encrypt_aes_gcm(
+    plaintext: bytes,
+    aes_key: bytes | str,
+    aad: bytes = b""
+) -> Dict[str, Any]:
+    """
+    Encrypts plaintext with AES-256-GCM (AEAD standard).
+    Provides zero padding overhead and hardware-accelerated GHASH authentication.
+    """
+    k_aes = _coerce_bytes(aes_key)
+    nonce = os.urandom(12)
+
+    t0 = time.perf_counter_ns()
+    cipher = AES.new(k_aes, AES.MODE_GCM, nonce=nonce)
+    if aad:
+        cipher.update(aad)
+    ciphertext, tag = cipher.encrypt_and_digest(plaintext)
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    return {
+        "cipher": "AES-256-GCM",
+        "nonce_b64": base64.b64encode(nonce).decode("ascii"),
+        "iv_b64": base64.b64encode(nonce).decode("ascii"),
+        "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+        "tag_b64": base64.b64encode(tag).decode("ascii"),
+        "hmac_b64": base64.b64encode(tag).decode("ascii"),
+        "plaintext_size": len(plaintext),
+        "ciphertext_size": len(ciphertext),
+        "iv_size": 12,
+        "mac_size": 16,
+        "block_plus_iv_size": len(ciphertext) + 12,
+        "total_protected_size": len(ciphertext) + 12 + 16,
+        "padding_bytes": 0,
+        "encrypt_ms": round(elapsed_ms, 4)
+    }
+
+
+def decrypt_aes_gcm(
+    payload: Dict[str, Any],
+    aes_key: bytes | str,
+    aad: bytes = b""
+) -> Tuple[bytes, float]:
+    """
+    Decrypts and verifies AES-256-GCM ciphertext and authentication tag.
+    """
+    k_aes = _coerce_bytes(aes_key)
+    nonce = base64.b64decode(payload.get("nonce_b64") or payload["iv_b64"])
+    ciphertext = base64.b64decode(payload["ciphertext_b64"])
+    tag = base64.b64decode(payload.get("tag_b64") or payload.get("hmac_b64", ""))
+
+    t0 = time.perf_counter_ns()
+    cipher = AES.new(k_aes, AES.MODE_GCM, nonce=nonce)
+    if aad:
+        cipher.update(aad)
+    try:
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+    except Exception as e:
+        raise ValueError("AES-GCM Integrity Check Failed: Authentication tag mismatch") from e
+
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+    return plaintext, round(elapsed_ms, 4)
+
+
+
+
+# TODO: Implement RC4 stream cipher and frame key derivation in next iteration
 
