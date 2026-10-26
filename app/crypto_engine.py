@@ -319,6 +319,79 @@ def decrypt_des(
     return plaintext, round(elapsed_ms, 4)
 
 
+def encrypt_rc4(
+    plaintext: bytes,
+    rc4_key: bytes | str,
+    hmac_key: bytes | str,
+    aad: bytes = b""
+) -> Dict[str, Any]:
+    """
+    Encrypts plaintext with RC4 stream cipher.
+    To prevent catastrophic keystream reuse across banking records, derives a unique
+    per-record 32-byte frame key using a random 16-byte salt:
+      frame_key = HMAC-SHA256(rc4_key, "RC4-FRAME-KEY:" || salt)
+    Drops initial 768 bytes of keystream to resist Fluhrer-Mantin-Shamir (FMS) bias.
+    Appends HMAC-SHA256 over (Salt || Ciphertext || AAD) for cryptographic integrity.
+    """
+    k_rc4 = _coerce_bytes(rc4_key)
+    k_hmac = _coerce_bytes(hmac_key)
+    salt = os.urandom(16)
+
+    t0 = time.perf_counter_ns()
+    frame_key = hmac.new(k_rc4, b"RC4-FRAME-KEY:" + salt, hashlib.sha256).digest()
+    cipher = ARC4.new(frame_key, drop=768)
+    ciphertext = cipher.encrypt(plaintext)
+    mac = hmac.new(k_hmac, salt + ciphertext + aad, hashlib.sha256).digest()
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    return {
+        "cipher": "RC4-Stream",
+        "iv_b64": base64.b64encode(salt).decode("ascii"),  # Salt stored in iv_b64
+        "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+        "hmac_b64": base64.b64encode(mac).decode("ascii"),
+        "plaintext_size": len(plaintext),
+        "ciphertext_size": len(ciphertext),
+        "iv_size": 16,
+        "mac_size": 32,
+        "block_plus_iv_size": len(ciphertext) + 16,
+        "total_protected_size": len(ciphertext) + 16 + 32,
+        "padding_bytes": 0,
+        "encrypt_ms": round(elapsed_ms, 4)
+    }
+
+
+def decrypt_rc4(
+    payload: Dict[str, Any],
+    rc4_key: bytes | str,
+    hmac_key: bytes | str,
+    aad: bytes = b""
+) -> Tuple[bytes, float]:
+    """
+    Verifies HMAC-SHA256 over (Salt || Ciphertext || AAD) first, then regenerates
+    frame key, drops 768 bytes, and decrypts RC4 stream.
+
+    Raises:
+        ValueError if HMAC verification fails.
+    """
+    k_rc4 = _coerce_bytes(rc4_key)
+    k_hmac = _coerce_bytes(hmac_key)
+
+    salt = base64.b64decode(payload["iv_b64"])
+    ciphertext = base64.b64decode(payload["ciphertext_b64"])
+    mac = base64.b64decode(payload["hmac_b64"])
+
+    t0 = time.perf_counter_ns()
+    expected_mac = hmac.new(k_hmac, salt + ciphertext + aad, hashlib.sha256).digest()
+    if not hmac.compare_digest(mac, expected_mac):
+        raise ValueError("RC4 Integrity Check Failed: HMAC mismatch")
+
+    frame_key = hmac.new(k_rc4, b"RC4-FRAME-KEY:" + salt, hashlib.sha256).digest()
+    cipher = ARC4.new(frame_key, drop=768)
+    plaintext = cipher.decrypt(ciphertext)
+    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+    return plaintext, round(elapsed_ms, 4)
+
+
 def encrypt_aes_gcm(
     plaintext: bytes,
     aes_key: bytes | str,
@@ -384,5 +457,5 @@ def decrypt_aes_gcm(
 
 
 
-# TODO: Implement RC4 stream cipher and frame key derivation in next iteration
+# TODO: Add high-level field and vault file helpers
 
