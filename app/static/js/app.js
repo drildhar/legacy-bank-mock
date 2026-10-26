@@ -1,6 +1,6 @@
 /**
  * Bank Nusantara - ATM Dispute, Fraud & e-KYC Customer Vault
- * Frontend Application Script - Core Validation & Navigation Scaffolding
+ * Frontend Application Script
  *
  * Implements Mandatory Modern Web Guidance Patterns:
  * 1. autofill-sign-in-form: Proper forms, show password toggles, unblocked paste.
@@ -126,7 +126,229 @@ function setupDialogLightDismiss(dialog) {
 }
 
 // ============================================================================
-// 3. TAB NAVIGATION & UI BINDINGS
+// 3. APPLICATION STATE & API HELPERS
+// ============================================================================
+
+const AppState = {
+  currentUser: null,
+  activeCipher: 'aes-256-cbc',
+  cases: [],
+  selectedCaseId: null,
+  selectedCaseData: null,
+  latestBenchmark: null
+};
+
+// Resilient API Fetch Helper (Handles /api/auth/* and /api/* interchangeable paths)
+async function apiFetch(url, options = {}) {
+  const defaultHeaders = {
+    'Accept': 'application/json'
+  };
+  if (options.body && !(options.body instanceof FormData)) {
+    defaultHeaders['Content-Type'] = 'application/json';
+  }
+  options.headers = { ...defaultHeaders, ...options.headers };
+
+  try {
+    let res = await fetch(url, options);
+
+    // If 404 on /api/auth/*, try /api/*
+    if (res.status === 404 && url.startsWith('/api/auth/')) {
+      const altUrl = url.replace('/api/auth/', '/api/');
+      res = await fetch(altUrl, options);
+    } else if (res.status === 404 && url.startsWith('/api/') && !url.startsWith('/api/auth/')) {
+      const altUrl = url.replace('/api/', '/api/auth/');
+      const altRes = await fetch(altUrl, options);
+      if (altRes.status !== 404) res = altRes;
+    }
+
+    return res;
+  } catch (err) {
+    console.error('API Fetch Network Error:', err);
+    throw err;
+  }
+}
+
+// Helper to format currency
+function formatIDR(amount) {
+  if (typeof amount === 'string' && amount.trim().length > 0) {
+    const digitsOnly = amount.replace(/[^0-9]/g, '');
+    if (digitsOnly.length > 0) {
+      return 'IDR ' + Number(digitsOnly).toLocaleString('id-ID');
+    }
+    return amount;
+  }
+  const num = Number(amount) || 2500000;
+  return 'IDR ' + num.toLocaleString('id-ID');
+}
+
+// ============================================================================
+// 4. AUTHENTICATION & SESSION MANAGEMENT
+// ============================================================================
+
+async function checkSession() {
+  try {
+    const res = await apiFetch('/api/auth/me');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.authenticated || data.user) {
+        AppState.currentUser = data.user || data;
+        renderAuthenticatedState();
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn('Session check note:', err);
+  }
+  renderLoggedOutState();
+  return false;
+}
+
+function renderAuthenticatedState() {
+  document.getElementById('authView').classList.add('hidden');
+  document.getElementById('authenticatedPortal').classList.remove('hidden');
+  document.getElementById('userHeaderProfile').classList.remove('hidden');
+
+  const username = AppState.currentUser ? (AppState.currentUser.username || AppState.currentUser.full_name || 'Customer') : 'Customer';
+  document.getElementById('headerUsername').textContent = username;
+}
+
+function renderLoggedOutState() {
+  document.getElementById('authView').classList.remove('hidden');
+  document.getElementById('authenticatedPortal').classList.add('hidden');
+  document.getElementById('userHeaderProfile').classList.add('hidden');
+}
+
+// Sign In Handler
+async function handleSignIn(e) {
+  e.preventDefault();
+  const form = e.target;
+  const alertBox = document.getElementById('signInAlert');
+  alertBox.classList.add('hidden');
+  alertBox.textContent = '';
+
+  if (!form.checkValidity()) {
+    form.querySelectorAll('input').forEach(input => {
+      input.dispatchEvent(new Event('blur'));
+    });
+    return;
+  }
+
+  const username = form.username.value.trim();
+  const password = form.password.value;
+
+  try {
+    const res = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await res.json();
+    if (res.ok && (data.success || data.user || data.authenticated)) {
+      AppState.currentUser = data.user || { username };
+      renderAuthenticatedState();
+    } else {
+      alertBox.textContent = data.message || data.error || 'Authentication failed. Please check your credentials.';
+      alertBox.classList.remove('hidden');
+    }
+  } catch (err) {
+    alertBox.textContent = 'Network or server error during sign-in. Please try again.';
+    alertBox.classList.remove('hidden');
+  }
+}
+
+// Registration Handler
+async function handleRegister(e) {
+  e.preventDefault();
+  const form = e.target;
+  const alertBox = document.getElementById('registerAlert');
+  alertBox.classList.add('hidden');
+  alertBox.textContent = '';
+
+  if (!form.checkValidity()) {
+    form.querySelectorAll('input').forEach(input => {
+      input.dispatchEvent(new Event('blur'));
+    });
+    return;
+  }
+
+  const full_name = form.full_name.value.trim();
+  const username = form.username.value.trim();
+  const password = form.password.value;
+
+  try {
+    const res = await apiFetch('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ full_name, username, password })
+    });
+
+    const data = await res.json();
+    if (res.ok && (data.success || data.user)) {
+      AppState.currentUser = data.user || { username, full_name };
+      renderAuthenticatedState();
+    } else {
+      alertBox.textContent = data.message || data.error || 'Registration failed.';
+      alertBox.classList.remove('hidden');
+    }
+  } catch (err) {
+    alertBox.textContent = 'Server error during vault creation.';
+    alertBox.classList.remove('hidden');
+  }
+}
+
+// Sign Out Handler
+async function handleSignOut() {
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST' });
+  } catch (_) {}
+  AppState.currentUser = null;
+  AppState.cases = [];
+  AppState.selectedCaseId = null;
+  AppState.selectedCaseData = null;
+  renderLoggedOutState();
+}
+
+// 1-Click Quick Demo Login Helper
+async function handleQuickDemoLogin() {
+  const demoUsername = 'demo_customer';
+  const demoPassword = 'BankDemo2026!';
+  const demoFullName = 'Budi Santoso';
+
+  // 1. Try login first
+  try {
+    let res = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: demoUsername, password: demoPassword })
+    });
+
+    if (!res.ok) {
+      // 2. Register demo customer if not exists
+      await apiFetch('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: demoUsername,
+          password: demoPassword,
+          full_name: demoFullName
+        })
+      });
+
+      // 3. Login again
+      res = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: demoUsername, password: demoPassword })
+      });
+    }
+
+    const data = await res.json();
+    AppState.currentUser = data.user || { username: demoUsername, full_name: demoFullName };
+    renderAuthenticatedState();
+  } catch (err) {
+    console.error('Quick Demo Login Error:', err);
+    alert('Could not complete Quick Demo Login. Ensure the backend server is running.');
+  }
+}
+
+// ============================================================================
+// 9. TAB NAVIGATION & UI BINDINGS
 // ============================================================================
 
 function switchTab(btnId, panelId) {
@@ -194,10 +416,10 @@ function setupPasswordToggles() {
 }
 
 // ============================================================================
-// 4. INITIALIZATION
+// 10. INITIALIZATION
 // ============================================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   // 1. Initialize modern-web-guidance input validation fallback & ARIA sync
   UserInvalidFallback.init(document);
 
@@ -217,4 +439,18 @@ document.addEventListener('DOMContentLoaded', () => {
   if (tabCasesBtn) tabCasesBtn.addEventListener('click', () => switchTab('tabCasesBtn', 'tabCasesPanel'));
   if (tabNewCaseBtn) tabNewCaseBtn.addEventListener('click', () => switchTab('tabNewCaseBtn', 'tabNewCasePanel'));
   if (tabBenchBtn) tabBenchBtn.addEventListener('click', () => switchTab('tabBenchBtn', 'tabBenchPanel'));
+
+  // 5. Auth form submissions
+  const signInForm = document.getElementById('signInForm');
+  const registerForm = document.getElementById('registerForm');
+  const btnSignOut = document.getElementById('btnSignOut');
+  const btnQuickDemoLogin = document.getElementById('btnQuickDemoLogin');
+
+  if (signInForm) signInForm.addEventListener('submit', handleSignIn);
+  if (registerForm) registerForm.addEventListener('submit', handleRegister);
+  if (btnSignOut) btnSignOut.addEventListener('click', handleSignOut);
+  if (btnQuickDemoLogin) btnQuickDemoLogin.addEventListener('click', handleQuickDemoLogin);
+
+  // 6. Check initial session
+  await checkSession();
 });

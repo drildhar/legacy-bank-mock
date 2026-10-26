@@ -21,6 +21,11 @@
       </div>
       <div class="header-status">
         <span class="badge badge-reg" title="Indonesian Personal Data Protection Law compliance">UU PDP No. 27/2022 Compliant</span>
+        <div id="userHeaderProfile" class="user-profile-widget hidden">
+          <span class="user-greeting">Welcome, <strong id="headerUsername">Customer</strong></span>
+          <span class="badge badge-kek" id="kekStatusBadge" title="Customer DEKs unwrapped in RAM only">Argon2id KEK Active</span>
+          <button type="button" id="btnSignOut" class="btn btn-sm btn-outline">Sign Out</button>
+        </div>
       </div>
     </div>
   </header>
@@ -54,6 +59,19 @@
             and CCTV footage. Every record is stored simultaneously across <strong>AES-256</strong>, <strong>DES</strong>, and <strong>RC4</strong> 
             to empirically benchmark regulatory compliance, storage overhead, and streaming playback.
           </p>
+
+          <div class="quick-demo-box">
+            <div class="quick-demo-header">
+              <span class="quick-demo-icon">⚡</span>
+              <strong>Examiner / Quick Demo Access</strong>
+            </div>
+            <p class="quick-demo-text">
+              Instantly sign in with pre-configured customer credentials, auto-deriving the KEK and loading mock ATM dispute cases with media.
+            </p>
+            <button type="button" id="btnQuickDemoLogin" class="btn btn-warning btn-block">
+              ⚡ Fill Demo Credentials &amp; Sign In to Vault
+            </button>
+          </div>
 
           <!-- Regulatory Classification Summary -->
           <div class="reg-summary-card">
