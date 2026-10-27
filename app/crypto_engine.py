@@ -630,7 +630,109 @@ def decrypt_bytes_single(
         raise ValueError(f"Unsupported cipher choice: {cipher_choice}. Expected 'aes', 'des', or 'rc4'.")
 
 
+def simulate_random_access_seek(
+    plaintext_video: bytes,
+    dek_bundle: Dict[str, Any],
+    seek_offset: int,
+    chunk_size: int = 65536
+) -> Dict[str, Any]:
+    """
+    Benchmarks jumping directly to `seek_offset` and decrypting a `chunk_size`
+    video frame buffer (simulating an HTTP 206 Partial Content Range request).
 
+    Demonstrates the fundamental architectural difference:
+    - AES-CBC: O(1) random-access seek by slicing ciphertext[seek_offset-16 : seek_offset] as IV.
+    - DES-CBC: O(1) random-access seek by slicing ciphertext[seek_offset-8 : seek_offset] as IV.
+    - RC4: O(N) linear stream seek requiring discarding `seek_offset` bytes of keystream.
 
-# TODO: Add video scrubbing simulation for random-access benchmarking
+    Verifies bit-for-bit authenticity against `plaintext_video[seek_offset : seek_offset + chunk_size]`.
+    """
+    aes_key = _coerce_bytes(dek_bundle["aes_key"])
+    des_key = _coerce_bytes(dek_bundle["des_key"])
+    rc4_key = _coerce_bytes(dek_bundle["rc4_key"])
+
+    # Align seek_offset to 16 bytes (AES block size)
+    seek_offset = (seek_offset // 16) * 16
+    if seek_offset < 16:
+        seek_offset = 16
+
+    # Ensure chunk_size is aligned and within bounds
+    if seek_offset + chunk_size > len(plaintext_video):
+        chunk_size = ((len(plaintext_video) - seek_offset) // 16) * 16
+
+    expected_chunk = plaintext_video[seek_offset : seek_offset + chunk_size]
+
+    # Pre-encrypt the full video buffer
+    aes_iv = os.urandom(16)
+    aes_cipher_full = AES.new(aes_key, AES.MODE_CBC, iv=aes_iv)
+    aes_ct = aes_cipher_full.encrypt(pad(plaintext_video, 16))
+
+    des_iv = os.urandom(8)
+    des_cipher_full = DES.new(des_key, DES.MODE_CBC, iv=des_iv)
+    des_ct = des_cipher_full.encrypt(pad(plaintext_video, 8))
+
+    rc4_salt = os.urandom(16)
+    rc4_frame_key = hmac.new(rc4_key, b"RC4-FRAME-KEY:" + rc4_salt, hashlib.sha256).digest()
+    rc4_cipher_full = ARC4.new(rc4_frame_key, drop=768)
+    rc4_ct = rc4_cipher_full.encrypt(plaintext_video)
+
+    # 1. AES-CBC O(1) Seek: Read previous 16 bytes of ciphertext as IV
+    t0 = time.perf_counter_ns()
+    aes_block_iv = aes_ct[seek_offset - 16 : seek_offset]
+    aes_seek_cipher = AES.new(aes_key, AES.MODE_CBC, iv=aes_block_iv)
+    aes_decrypted = aes_seek_cipher.decrypt(aes_ct[seek_offset : seek_offset + chunk_size])
+    aes_seek_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    if aes_decrypted != expected_chunk:
+        raise RuntimeError("AES-CBC seek verification failed: Decrypted chunk mismatch!")
+
+    # 2. DES-CBC O(1) Seek: Read previous 8 bytes of ciphertext as IV
+    t0 = time.perf_counter_ns()
+    des_block_iv = des_ct[seek_offset - 8 : seek_offset]
+    des_seek_cipher = DES.new(des_key, DES.MODE_CBC, iv=des_block_iv)
+    des_decrypted = des_seek_cipher.decrypt(des_ct[seek_offset : seek_offset + chunk_size])
+    des_seek_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    if des_decrypted != expected_chunk:
+        raise RuntimeError("DES-CBC seek verification failed: Decrypted chunk mismatch!")
+
+    # 3. RC4 Stream O(N) Seek: Must generate and discard seek_offset keystream bytes from byte 0
+    t0 = time.perf_counter_ns()
+    rc4_seek_cipher = ARC4.new(rc4_frame_key, drop=768)
+    # Discard seek_offset keystream bytes in 64 KB buffers
+    discard_buf_len = 65536
+    dummy_zeros = b"\x00" * discard_buf_len
+    remaining_bytes = seek_offset
+    while remaining_bytes > 0:
+        step = min(remaining_bytes, discard_buf_len)
+        rc4_seek_cipher.encrypt(dummy_zeros[:step])
+        remaining_bytes -= step
+    rc4_decrypted = rc4_seek_cipher.decrypt(rc4_ct[seek_offset : seek_offset + chunk_size])
+    rc4_seek_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    if rc4_decrypted != expected_chunk:
+        raise RuntimeError("RC4 stream seek verification failed: Decrypted chunk mismatch!")
+
+    ratio = round(rc4_seek_ms / max(aes_seek_ms, 1e-6), 2)
+
+    return {
+        "seek_offset": seek_offset,
+        "seek_offset_mb": round(seek_offset / (1024 * 1024), 2),
+        "chunk_size": chunk_size,
+        "chunk_size_kb": round(chunk_size / 1024, 2),
+        "aes_seek_ms": round(aes_seek_ms, 4),
+        "des_seek_ms": round(des_seek_ms, 4),
+        "rc4_seek_ms": round(rc4_seek_ms, 4),
+        "verified": True,
+        "ratio_rc4_to_aes": ratio,
+        "interpretation": (
+            f"At byte offset {seek_offset:,} ({seek_offset / (1024 * 1024):.2f} MB), "
+            f"AES-256-CBC completed O(1) random-access seek in {aes_seek_ms:.4f} ms and "
+            f"DES-CBC in {des_seek_ms:.4f} ms, whereas RC4 required {rc4_seek_ms:.4f} ms "
+            f"({ratio:.1f}x slower) due to O(N) sequential keystream discarding. "
+            f"This proves stream ciphers like RC4 are architecturally unsuitable for "
+            f"HTTP Range video scrubbing in ATM CCTV / e-KYC evidence portals."
+        )
+    }
+
 
