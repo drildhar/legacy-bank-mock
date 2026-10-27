@@ -28,10 +28,6 @@ from Crypto.Cipher import AES, ARC4, DES
 from Crypto.Util.Padding import pad, unpad
 
 
-# =====================================================================
-# Internal Type Coercion Helpers
-# =====================================================================
-
 def _coerce_bytes(key: bytes | str) -> bytes:
     """Coerce hex string or raw bytes into bytes."""
     if isinstance(key, str):
@@ -41,10 +37,6 @@ def _coerce_bytes(key: bytes | str) -> bytes:
             return key.encode("utf-8")
     return key
 
-
-# =====================================================================
-# 1. Customer Authentication & Password Hashing
-# =====================================================================
 
 def hash_password(password: str, salt_hex: Optional[str] = None) -> Dict[str, str]:
     """
@@ -89,10 +81,6 @@ def verify_password(password: str, salt_hex: str, expected_hash_hex: str) -> boo
     ).hex()
     return hmac.compare_digest(computed, expected_hash_hex)
 
-
-# =====================================================================
-# 2. User-Bound Envelope Encryption (KEK & DEK Bundle)
-# =====================================================================
 
 def generate_dek_bundle() -> Dict[str, str]:
     """
@@ -184,12 +172,6 @@ def unwrap_dek_bundle(wrapped_bundle_json: str, password: str, kdf_salt_hex: str
         raise ValueError("Invalid password or corrupted key bundle") from e
 
 
-# =====================================================================
-# 3. Individual Cipher Encrypt & Decrypt (Encrypt-then-MAC Integrity)
-# =====================================================================
-
-# ----------------- AES-256-CBC + HMAC-SHA256 -----------------
-
 def encrypt_aes(
     plaintext: bytes,
     aes_key: bytes | str,
@@ -264,8 +246,6 @@ def decrypt_aes(
     return plaintext, round(elapsed_ms, 4)
 
 
-# ----------------- DES-CBC + HMAC-SHA256 -----------------
-
 def encrypt_des(
     plaintext: bytes,
     des_key: bytes | str,
@@ -338,8 +318,6 @@ def decrypt_des(
     elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
     return plaintext, round(elapsed_ms, 4)
 
-
-# ----------------- RC4 Stream + Salted Subkey + HMAC-SHA256 -----------------
 
 def encrypt_rc4(
     plaintext: bytes,
@@ -414,8 +392,6 @@ def decrypt_rc4(
     return plaintext, round(elapsed_ms, 4)
 
 
-# ----------------- AES-256-GCM (Optional AEAD Reference) -----------------
-
 def encrypt_aes_gcm(
     plaintext: bytes,
     aes_key: bytes | str,
@@ -478,10 +454,6 @@ def decrypt_aes_gcm(
     elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
     return plaintext, round(elapsed_ms, 4)
 
-
-# =====================================================================
-# 4. Tri-Cipher Helper Functions for Text Fields & Binary Files
-# =====================================================================
 
 def encrypt_field_tri(
     plaintext_str: str,
@@ -658,10 +630,6 @@ def decrypt_bytes_single(
         raise ValueError(f"Unsupported cipher choice: {cipher_choice}. Expected 'aes', 'des', or 'rc4'.")
 
 
-# =====================================================================
-# 5. Random-Access Video Scrubbing Simulation (HTTP Range Seeking)
-# =====================================================================
-
 def simulate_random_access_seek(
     plaintext_video: bytes,
     dek_bundle: Dict[str, Any],
@@ -766,3 +734,5 @@ def simulate_random_access_seek(
             f"HTTP Range video scrubbing in ATM CCTV / e-KYC evidence portals."
         )
     }
+
+
