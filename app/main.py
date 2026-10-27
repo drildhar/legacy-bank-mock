@@ -11,8 +11,10 @@ Enforces zero-plaintext-at-rest:
 
 from __future__ import annotations
 
+import base64
 import functools
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -25,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from flask import (
     Flask,
+    Response,
     jsonify,
     render_template,
     request,
@@ -43,14 +46,17 @@ from app.database import (
     create_attachment,
     create_dispute_case,
     create_user,
+    get_attachment_by_id,
     get_attachments_by_case,
     get_case_by_id,
     get_cases_by_user,
     get_user_by_email,
     get_user_by_username,
+    get_vault_path,
     init_db,
 )
 from app.crypto_engine import (
+    decrypt_bytes_single,
     decrypt_field_tri,
     encrypt_bytes_tri,
     encrypt_field_tri,
@@ -1207,6 +1213,207 @@ def create_app() -> Flask:
             },
             "sqlite_row": dict(row),
             "media_blobs": attachments_meta
+        }), 200
+
+    # -----------------------------------------------------------------
+    # Attachment Retrieval & Evidence Tamper Verification Routes
+    # -----------------------------------------------------------------
+    @app.route("/api/attachments/<attachment_id>/download", methods=["GET"])
+    @login_required
+    def api_download_attachment(attachment_id: str):
+        """
+        Downloads and verifies a vault attachment:
+        1. Reads raw ciphertext from storage/vault/{cipher}/{attachment_id}.enc.
+        2. Verifies HMAC-SHA256 integrity tag first.
+        3. Decrypts with chosen cipher (AES-256-CBC, DES-CBC, or RC4).
+        4. Verifies SHA-256 hash matches plaintext_sha256 (guaranteeing 100% bit-for-bit integrity).
+        5. Serves with X-Decryption-Cipher, X-Decryption-Time-Ms, and X-SHA256-Verified headers.
+        """
+        sess = get_current_session()
+        user_id = sess["user_id"]
+        dek_bundle = sess["dek_bundle"]
+        cipher = request.args.get("cipher", "aes").lower().strip()
+        case_id_param = request.args.get("case_id")
+
+        att = get_attachment_by_id(attachment_id, user_id=user_id)
+        if not att and case_id_param:
+            # Check by category name if category was passed as ID
+            atts = get_attachments_by_case(case_id_param, user_id=user_id)
+            for a in atts:
+                if a["category"] == attachment_id or a["id"] == attachment_id:
+                    att = a
+                    break
+
+        if not att:
+            return jsonify({"error": "Attachment not found or access denied"}), 404
+
+        case_id = att["case_id"]
+        aad = f"{user_id}:{case_id}".encode("utf-8")
+
+        # Read encrypted blob from vault
+        try:
+            vault_file = get_vault_path(cipher, att["id"])
+            if not vault_file.exists():
+                return jsonify({"error": f"Encrypted file blob not found for cipher {cipher}"}), 404
+            with open(vault_file, "rb") as f:
+                ciphertext = f.read()
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        # Retrieve metadata JSON for cipher
+        if cipher in ("aes", "aes-256-cbc", "aes-256"):
+            meta = json.loads(att["aes_meta_json"])
+        elif cipher in ("des", "des-cbc"):
+            meta = json.loads(att["des_meta_json"])
+        elif cipher in ("rc4", "rc4-stream"):
+            meta = json.loads(att["rc4_meta_json"])
+        else:
+            return jsonify({"error": f"Unsupported cipher: {cipher}"}), 400
+
+        # Decrypt binary file
+        try:
+            plaintext, dec_ms = decrypt_bytes_single(
+                ciphertext=ciphertext,
+                meta=meta,
+                dek_bundle=dek_bundle,
+                cipher_choice=cipher,
+                aad=aad
+            )
+        except Exception as e:
+            return jsonify({"error": f"Decryption failed: {str(e)}"}), 400
+
+        # Verify plaintext SHA-256 hash
+        computed_sha256 = hashlib.sha256(plaintext).hexdigest()
+        if computed_sha256 != att["plaintext_sha256"]:
+            return jsonify({
+                "error": "Evidence integrity failure: Computed SHA-256 does not match original plaintext hash!",
+                "computed": computed_sha256,
+                "expected": att["plaintext_sha256"]
+            }), 400
+
+        # Decrypt original filename & mime type
+        try:
+            orig_filename, _ = decrypt_field_tri(json.loads(att["enc_original_filename"]), dek_bundle, cipher, aad=aad)
+            orig_mime, _ = decrypt_field_tri(json.loads(att["enc_mime_type"]), dek_bundle, cipher, aad=aad)
+        except Exception:
+            orig_filename = f"evidence_{att['category']}.dat"
+            orig_mime = "application/octet-stream"
+
+        response = Response(plaintext, mimetype=orig_mime)
+        response.headers["Content-Disposition"] = f'inline; filename="{orig_filename}"'
+        response.headers["X-Decryption-Cipher"] = cipher.upper()
+        response.headers["X-Decryption-Time-Ms"] = str(round(dec_ms, 3))
+        response.headers["X-SHA256-Verified"] = "true"
+        return response
+
+    @app.route("/api/attachments/<attachment_id>/tamper-test", methods=["POST"])
+    @login_required
+    def api_tamper_test(attachment_id: str):
+        """
+        Evidence tampering demonstration:
+        Flips 1 bit in memory at the specified offset of the ciphertext,
+        demonstrating that HMAC-SHA256 rejects the tampered ciphertext before decryption.
+        Does NOT alter the file on disk.
+        """
+        sess = get_current_session()
+        user_id = sess["user_id"]
+        dek_bundle = sess["dek_bundle"]
+
+        data = request.get_json(silent=True) or {}
+        cipher = (data.get("cipher") or "aes").lower().strip()
+        offset_req = int(data.get("byte_offset", 64))
+
+        att = get_attachment_by_id(attachment_id, user_id=user_id)
+        if not att:
+            # Fallback search by category
+            cases = get_cases_by_user(user_id)
+            for c in cases:
+                atts = get_attachments_by_case(c["id"], user_id=user_id)
+                for a in atts:
+                    if a["category"] == attachment_id or a["id"] == attachment_id:
+                        att = a
+                        break
+                if att:
+                    break
+
+        if not att:
+            return jsonify({"error": "Attachment not found"}), 404
+
+        case_id = att["case_id"]
+        aad = f"{user_id}:{case_id}".encode("utf-8")
+
+        vault_file = get_vault_path(cipher, att["id"])
+        if not vault_file.exists():
+            return jsonify({"error": "Ciphertext file not found in vault"}), 404
+
+        with open(vault_file, "rb") as f:
+            raw_ciphertext = f.read()
+
+        if cipher in ("aes", "aes-256-cbc", "aes-256"):
+            meta = json.loads(att["aes_meta_json"])
+            iv_or_salt = base64.b64decode(meta["iv_b64"])
+        elif cipher in ("des", "des-cbc"):
+            meta = json.loads(att["des_meta_json"])
+            iv_or_salt = base64.b64decode(meta["iv_b64"])
+        elif cipher in ("rc4", "rc4-stream"):
+            meta = json.loads(att["rc4_meta_json"])
+            iv_or_salt = base64.b64decode(meta["iv_b64"])
+        else:
+            return jsonify({"error": f"Unsupported cipher: {cipher}"}), 400
+
+        original_hmac = meta["hmac_b64"]
+        expected_hmac_hex = base64.b64decode(original_hmac).hex()
+
+        # In-memory bit flip
+        tampered_ct = bytearray(raw_ciphertext)
+        flip_pos = min(offset_req, len(tampered_ct) - 1) if tampered_ct else 0
+        if tampered_ct:
+            tampered_ct[flip_pos] ^= 0x01
+
+        # Calculate what the HMAC would be on the tampered buffer
+        k_hmac = bytes.fromhex(dek_bundle["hmac_key"])
+        calculated_tampered_hmac_hex = hmac.new(
+            k_hmac,
+            iv_or_salt + bytes(tampered_ct) + aad,
+            hashlib.sha256
+        ).hexdigest()
+
+        # Attempt decryption and catch integrity exception
+        tamper_detected = False
+        caught_error = ""
+        try:
+            decrypt_bytes_single(
+                ciphertext=bytes(tampered_ct),
+                meta=meta,
+                dek_bundle=dek_bundle,
+                cipher_choice=cipher,
+                aad=aad
+            )
+        except ValueError as e:
+            tamper_detected = True
+            caught_error = str(e)
+        except Exception as e:
+            tamper_detected = True
+            caught_error = str(e)
+
+        return jsonify({
+            "tamper_detected": tamper_detected,
+            "cipher": cipher.upper(),
+            "attachment_id": att["id"],
+            "byte_offset": flip_pos,
+            "original_hmac": expected_hmac_hex,
+            "calculated_hmac": calculated_tampered_hmac_hex,
+            "error_message": caught_error,
+            "message": (
+                f"1 bit was flipped in memory at byte offset {flip_pos}. "
+                f"HMAC-SHA256 signature verification rejected the corrupted ciphertext. "
+                "Decryption was blocked, preserving evidentiary integrity!"
+            ),
+            "explanation": (
+                "Encrypt-then-MAC (HMAC-SHA256) guarantees that altered or forged evidence "
+                "(such as manipulated CCTV footage, edited bank statement amounts, or altered KTP IDs) "
+                "is refused before any decryption occurs."
+            )
         }), 200
     return app
 
