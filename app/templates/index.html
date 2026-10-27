@@ -267,6 +267,41 @@
       <!-- ======================================================== -->
       <div id="tabCasesPanel" role="tabpanel" aria-labelledby="tabCasesBtn" class="portal-tab-panel active">
         
+        <!-- Controls Bar: Decryption Cipher Switcher & Demo Generator -->
+        <div class="vault-controls-card">
+          <div class="cipher-switcher-group">
+            <label for="cipherSelect" class="control-label">
+              <strong>Active Decryption Cipher:</strong>
+            </label>
+            <div class="cipher-pills" role="radiogroup" aria-label="Select Decryption Cipher">
+              <label class="cipher-pill-label">
+                <input type="radio" name="activeCipher" value="aes-256-cbc" checked>
+                <span class="pill-badge pill-aes">🔒 AES-256-CBC (Modern Standard)</span>
+              </label>
+              <label class="cipher-pill-label">
+                <input type="radio" name="activeCipher" value="des-cbc">
+                <span class="pill-badge pill-des">🏛️ DES-CBC (Legacy ATM Fleet)</span>
+              </label>
+              <label class="cipher-pill-label">
+                <input type="radio" name="activeCipher" value="rc4">
+                <span class="pill-badge pill-rc4">🌊 RC4-Stream (Legacy Stream)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="vault-actions-group">
+            <div class="live-telemetry-badge" id="liveTelemetryBadge">
+              <span class="telemetry-dot">●</span>
+              <span id="telemetryCipherLabel">AES-256-CBC</span> | 
+              <span id="telemetryTimeLabel">Decryption: 0.84 ms</span> | 
+              <span id="telemetryHmacLabel" class="text-success">✅ HMAC-SHA256 Intact</span>
+            </div>
+            <button type="button" id="btnGenDemoCase" class="btn btn-sm btn-warning">
+              ⚡ Generate 1-Click Demo ATM Dispute Case
+            </button>
+          </div>
+        </div>
+
         <!-- Cases Explorer Layout (Sidebar list + Detail View) -->
         <div class="cases-layout-grid">
           <!-- Left: Case List Sidebar -->
@@ -278,16 +313,270 @@
             <div id="casesListContainer" class="cases-list" role="listbox" aria-label="Dispute Cases List">
               <div class="empty-placeholder">
                 <p>No dispute cases found in customer vault.</p>
+                <button type="button" id="btnSidebarGenDemo" class="btn btn-sm btn-outline">Generate 1-Click Demo Case</button>
               </div>
             </div>
           </div>
 
-          <!-- Right: Active Case Detail Placeholder -->
+          <!-- Right: Active Case Detail & Telemetry View -->
           <div class="case-detail-card" id="caseDetailCard">
+            
+            <!-- Default placeholder when no case selected -->
             <div id="caseDetailPlaceholder" class="empty-detail-placeholder">
               <div class="placeholder-icon">📂</div>
               <h3>Select an ATM Dispute Case</h3>
-              <p>Choose a dispute case from the sidebar to inspect decrypted customer fields, evidentiary media attachments, and cryptographic padding metrics.</p>
+              <p>Choose a dispute case from the sidebar or click below to generate an authentic demo case complete with encrypted KTP scan, bank statement, and ATM CCTV video.</p>
+              <button type="button" id="btnDetailGenDemo" class="btn btn-primary">⚡ Generate 1-Click Demo Case</button>
+            </div>
+
+            <!-- Case Content Container (shown when case loaded) -->
+            <div id="caseDetailContent" class="case-detail-content hidden">
+              
+              <!-- Case Header -->
+              <div class="case-header-bar">
+                <div class="case-title-meta">
+                  <div class="case-id-tag">Case ID: <code id="detailCaseId">CASE-00000000</code></div>
+                  <h3 id="detailDisputeTitle" class="case-main-title">ATM Cash-Not-Dispensed Dispute</h3>
+                  <span class="case-timestamp" id="detailCreatedAt">Filed: 2026-10-27 10:15:00 UTC</span>
+                </div>
+                <div class="case-header-actions">
+                  <button type="button" id="btnInspectRawVault" class="btn btn-sm btn-navy">
+                    🔍 Inspect Raw Zero-Plaintext Vault
+                  </button>
+                </div>
+              </div>
+
+              <!-- Two Column Personal & Financial Classification Cards -->
+              <div class="tiers-grid">
+                
+                <!-- TIER 1: General Personal Data -->
+                <div class="tier-card tier-1-card">
+                  <div class="tier-card-header">
+                    <span class="tier-tag">UU PDP Art. 4(3) / GDPR Art. 4(1)</span>
+                    <h4>Tier 1: General Personal Data</h4>
+                  </div>
+                  <div class="tier-card-body">
+                    <dl class="data-pair-list">
+                      <div class="data-pair">
+                        <dt>Customer Full Name:</dt>
+                        <dd id="detailFullName">Budi Santoso</dd>
+                      </div>
+                      <div class="data-pair">
+                        <dt>16-Digit NIK (National ID):</dt>
+                        <dd><code id="detailNik">3171012304920005</code></dd>
+                      </div>
+                      <div class="data-pair">
+                        <dt>Registered Phone:</dt>
+                        <dd id="detailPhone">+62 812-3456-7890</dd>
+                      </div>
+                      <div class="data-pair">
+                        <dt>Mother's Maiden Name:</dt>
+                        <dd><em id="detailMotherName">Siti Aminah</em> <span class="badge badge-danger">High Fraud Risk Field</span></dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+
+                <!-- TIER 2: Specific Financial & Biometric Data -->
+                <div class="tier-card tier-2-card">
+                  <div class="tier-card-header">
+                    <span class="tier-tag">UU PDP Art. 4(2)(f) / GDPR Art. 9</span>
+                    <h4>Tier 2: Specific Financial &amp; ATM Data</h4>
+                  </div>
+                  <div class="tier-card-body">
+                    <dl class="data-pair-list">
+                      <div class="data-pair">
+                        <dt>Disputed Amount:</dt>
+                        <dd class="text-amount" id="detailDisputedAmount">IDR 2,500,000</dd>
+                      </div>
+                      <div class="data-pair">
+                        <dt>16-Digit Card PAN:</dt>
+                        <dd><code id="detailCardPan">5243-6200-1122-3344</code></dd>
+                      </div>
+                      <div class="data-pair">
+                        <dt>Bank Account Number:</dt>
+                        <dd><code id="detailAccountNum">123-00-9876543-2</code></dd>
+                      </div>
+                      <div class="data-pair">
+                        <dt>8-Byte ISO 8583 ATM STAN:</dt>
+                        <dd><code id="detailAtmStan">STAN8841</code> <span class="badge badge-info">EPP 8-Byte Block</span></dd>
+                      </div>
+                      <div class="data-pair narrative-pair">
+                        <dt>Incident Narrative:</dt>
+                        <dd id="detailNarrative">Account debited IDR 2,500,000 at ATM Nusantara Sudirman Booth 04, but cash shutter jammed and zero cash was dispensed.</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+
+              </div>
+
+              <!-- Encrypted Media Attachments Section -->
+              <div class="media-attachments-section">
+                <div class="section-title-row">
+                  <h4>Mandatory Encrypted Evidentiary Media (3 Payload Scales)</h4>
+                  <span class="section-hint">Decrypted seamlessly in RAM via active cipher: <strong id="activeCipherMediaLabel">AES-256-CBC</strong></span>
+                </div>
+
+                <div class="attachments-grid">
+                  
+                  <!-- ATTACHMENT 1: Scanned Identity Document (id_scan) -->
+                  <div class="attachment-card" id="attachCardIdScan">
+                    <div class="attachment-header">
+                      <span class="attachment-badge">Tier 1 &bull; Scanned ID Document</span>
+                      <h5>1. Scanned KTP / ID Card</h5>
+                    </div>
+                    <div class="attachment-preview" id="previewIdScanContainer">
+                      <img id="imgIdScanPreview" src="" alt="Decrypted KTP Scan Preview" class="preview-media-img hidden">
+                      <div id="placeholderIdScan" class="media-preview-placeholder">Loading preview...</div>
+                    </div>
+                    <div class="attachment-meta">
+                      <span class="file-name" id="nameIdScan">ktp_card_scan.jpg</span>
+                      <span class="file-size" id="sizeIdScan">~520 KB</span>
+                    </div>
+                    <div class="attachment-actions">
+                      <a id="btnDownloadIdScan" href="#" class="btn btn-sm btn-primary" download>
+                        ⬇️ Download Decrypted
+                      </a>
+                      <button type="button" class="btn btn-sm btn-outline-danger btn-tamper-test" data-category="id_scan" title="Simulate 1-bit memory corruption on ciphertext">
+                        🛡️ Simulate Bit-Flip Attack
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- ATTACHMENT 2: Office Document (office_doc) -->
+                  <div class="attachment-card" id="attachCardOfficeDoc">
+                    <div class="attachment-header">
+                      <span class="attachment-badge">Tier 2 &bull; Bank Office Document</span>
+                      <h5>2. Bank e-Statement / Affidavit</h5>
+                    </div>
+                    <div class="attachment-preview office-doc-preview">
+                      <div class="doc-icon-preview">📑</div>
+                      <div class="doc-preview-info">
+                        <strong id="nameOfficeDoc">bank_dispute_statement.pdf</strong>
+                        <p id="sizeOfficeDoc">~1.8 MB (PDF / XLSX Ledger)</p>
+                        <span class="badge badge-success">Cryptographically Intact</span>
+                      </div>
+                    </div>
+                    <div class="attachment-meta">
+                      <span class="file-name" id="nameOfficeDocFooter">bank_dispute_statement.pdf</span>
+                      <span class="file-size" id="sizeOfficeDocFooter">~1.8 MB</span>
+                    </div>
+                    <div class="attachment-actions">
+                      <a id="btnDownloadOfficeDoc" href="#" class="btn btn-sm btn-primary" download>
+                        ⬇️ Download Decrypted
+                      </a>
+                      <button type="button" class="btn btn-sm btn-outline-danger btn-tamper-test" data-category="office_doc" title="Simulate 1-bit memory corruption on ciphertext">
+                        🛡️ Simulate Bit-Flip Attack
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- ATTACHMENT 3: Video Evidence (video_evidence) -->
+                  <div class="attachment-card" id="attachCardVideo">
+                    <div class="attachment-header">
+                      <span class="attachment-badge">Tier 2 &bull; CCTV / e-KYC Video</span>
+                      <h5>3. ATM CCTV / e-KYC Video Evidence</h5>
+                    </div>
+                    <div class="attachment-preview video-preview-box">
+                      <video id="videoPlayer" controls preload="metadata" class="preview-media-video">
+                        <p>Your browser does not support HTML5 video streaming.</p>
+                      </video>
+                      <div id="placeholderVideo" class="media-preview-placeholder hidden">Video buffering...</div>
+                    </div>
+                    <div class="attachment-meta">
+                      <span class="file-name" id="nameVideo">atm_cctv_shutter_jam.mp4</span>
+                      <span class="file-size" id="sizeVideo">~8.4 MB (H.264)</span>
+                    </div>
+                    <div class="attachment-actions">
+                      <a id="btnDownloadVideo" href="#" class="btn btn-sm btn-primary" download>
+                        ⬇️ Download Decrypted
+                      </a>
+                      <button type="button" class="btn btn-sm btn-outline-danger btn-tamper-test" data-category="video_evidence" title="Simulate 1-bit memory corruption on ciphertext">
+                        🛡️ Simulate Bit-Flip Attack
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              <!-- Per-Field & Per-File Cipher Storage Overhead Comparison Table -->
+              <div class="comparison-section">
+                <div class="section-title-row">
+                  <h4>Cryptographic Storage &amp; Padding Overhead Breakdown for this Case</h4>
+                  <span class="section-hint">Demonstrates DES-CBC's 33%–50% compactness on 8B/16B fields vs. AES-256 dominance on media</span>
+                </div>
+
+                <div tabindex="0" role="region" aria-labelledby="caseComparisonTableCaption" class="table-wrapper">
+                  <table class="table-responsive-cards" id="caseComparisonTable">
+                    <caption id="caseComparisonTableCaption">
+                      Per-Field &amp; Per-File Overhead Across AES-256-CBC, DES-CBC, and RC4
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Data Field / Payload Item</th>
+                        <th scope="col">Plaintext Size</th>
+                        <th scope="col">DES-CBC (8B Block + 8B IV)</th>
+                        <th scope="col">AES-256-CBC (16B Block + 16B IV)</th>
+                        <th scope="col">RC4 (Stream + 16B Salt)</th>
+                        <th scope="col">Architectural Outcome</th>
+                      </tr>
+                    </thead>
+                    <tbody id="caseComparisonTableBody">
+                      <tr>
+                        <th scope="row">8-Byte ATM STAN (STAN8841)</th>
+                        <td>8 Bytes</td>
+                        <td><strong>16 Bytes</strong> (+8B IV) = 24B</td>
+                        <td><strong>32 Bytes</strong> (+16B IV) = 48B</td>
+                        <td>8 Bytes (+16B Salt) = 24B</td>
+                        <td><span class="badge badge-success">DES 50% more compact than AES</span></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">16-Digit NIK (National ID)</th>
+                        <td>16 Bytes</td>
+                        <td><strong>24 Bytes</strong> (+8B IV) = 32B</td>
+                        <td><strong>32 Bytes</strong> (+16B IV) = 48B</td>
+                        <td>16 Bytes (+16B Salt) = 32B</td>
+                        <td><span class="badge badge-success">DES 33% more compact than AES</span></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">16-Digit Card PAN</th>
+                        <td>16 Bytes</td>
+                        <td><strong>24 Bytes</strong> (+8B IV) = 32B</td>
+                        <td><strong>32 Bytes</strong> (+16B IV) = 48B</td>
+                        <td>16 Bytes (+16B Salt) = 32B</td>
+                        <td><span class="badge badge-success">DES 33% more compact than AES</span></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Scanned KTP (~520 KB)</th>
+                        <td>532,480 B</td>
+                        <td>532,488 B (+8B IV) &bull; 24.2 ms</td>
+                        <td>532,496 B (+16B IV) &bull; <strong>1.1 ms</strong></td>
+                        <td>532,480 B (+16B Salt) &bull; 3.8 ms</td>
+                        <td><span class="badge badge-info">AES 22&times; faster via AES-NI</span></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Bank e-Statement (~1.8 MB)</th>
+                        <td>1,887,436 B</td>
+                        <td>1,887,440 B (+8B IV) &bull; 86.4 ms</td>
+                        <td>1,887,456 B (+16B IV) &bull; <strong>3.9 ms</strong></td>
+                        <td>1,887,436 B (+16B Salt) &bull; 13.2 ms</td>
+                        <td><span class="badge badge-info">AES 22&times; faster via AES-NI</span></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">ATM CCTV Video (~8.4 MB)</th>
+                        <td>8,808,038 B</td>
+                        <td>8,808,040 B (+8B IV) &bull; 412.0 ms</td>
+                        <td>8,808,048 B (+16B IV) &bull; <strong>18.4 ms</strong></td>
+                        <td>8,808,038 B (+16B Salt) &bull; 61.5 ms</td>
+                        <td><span class="badge badge-info">AES 22&times; faster &bull; DES CPU lock</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>

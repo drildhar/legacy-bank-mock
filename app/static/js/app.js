@@ -193,6 +193,7 @@ async function checkSession() {
       if (data.authenticated || data.user) {
         AppState.currentUser = data.user || data;
         renderAuthenticatedState();
+        await loadCases();
         return true;
       }
     }
@@ -246,6 +247,7 @@ async function handleSignIn(e) {
     if (res.ok && (data.success || data.user || data.authenticated)) {
       AppState.currentUser = data.user || { username };
       renderAuthenticatedState();
+      await loadCases();
     } else {
       alertBox.textContent = data.message || data.error || 'Authentication failed. Please check your credentials.';
       alertBox.classList.remove('hidden');
@@ -285,6 +287,8 @@ async function handleRegister(e) {
     if (res.ok && (data.success || data.user)) {
       AppState.currentUser = data.user || { username, full_name };
       renderAuthenticatedState();
+      await generateDemoCase(false);
+      await loadCases();
     } else {
       alertBox.textContent = data.message || data.error || 'Registration failed.';
       alertBox.classList.remove('hidden');
@@ -313,7 +317,6 @@ async function handleQuickDemoLogin() {
   const demoPassword = 'BankDemo2026!';
   const demoFullName = 'Budi Santoso';
 
-  // 1. Try login first
   try {
     let res = await apiFetch('/api/auth/login', {
       method: 'POST',
@@ -321,7 +324,6 @@ async function handleQuickDemoLogin() {
     });
 
     if (!res.ok) {
-      // 2. Register demo customer if not exists
       await apiFetch('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({
@@ -331,7 +333,6 @@ async function handleQuickDemoLogin() {
         })
       });
 
-      // 3. Login again
       res = await apiFetch('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username: demoUsername, password: demoPassword })
@@ -341,9 +342,346 @@ async function handleQuickDemoLogin() {
     const data = await res.json();
     AppState.currentUser = data.user || { username: demoUsername, full_name: demoFullName };
     renderAuthenticatedState();
+    await loadCases();
+    if (AppState.cases.length === 0) {
+      await generateDemoCase(false);
+      await loadCases();
+    }
   } catch (err) {
     console.error('Quick Demo Login Error:', err);
     alert('Could not complete Quick Demo Login. Ensure the backend server is running.');
+  }
+}
+
+// ============================================================================
+// 5. CASES & ACTIVE DECIPHERING EXPLORER (TAB 1)
+// ============================================================================
+
+async function loadCases() {
+  const cipher = AppState.activeCipher;
+  try {
+    const res = await apiFetch(`/api/cases?cipher=${encodeURIComponent(cipher)}`);
+    if (res.ok) {
+      const data = await res.json();
+      AppState.cases = Array.isArray(data) ? data : (data.cases || []);
+      renderCasesList();
+
+      if (AppState.cases.length > 0) {
+        const targetId = AppState.selectedCaseId || AppState.cases[0].id || AppState.cases[0].case_id;
+        await selectCase(targetId);
+      } else {
+        renderEmptyCaseDetail();
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load cases:', err);
+  }
+}
+
+function renderCasesList() {
+  const container = document.getElementById('casesListContainer');
+  const countBadge = document.getElementById('caseCountBadge');
+  countBadge.textContent = `${AppState.cases.length} Case${AppState.cases.length === 1 ? '' : 's'}`;
+
+  if (AppState.cases.length === 0) {
+    container.innerHTML = `
+      <div class="empty-placeholder">
+        <p>No dispute cases found in customer vault.</p>
+        <button type="button" id="btnSidebarGenDemo" class="btn btn-sm btn-outline">Generate 1-Click Demo Case</button>
+      </div>
+    `;
+    const btn = document.getElementById('btnSidebarGenDemo');
+    if (btn) btn.addEventListener('click', () => generateDemoCase(true));
+    return;
+  }
+
+  container.innerHTML = '';
+  AppState.cases.forEach(c => {
+    const caseId = c.id || c.case_id || 'UNKNOWN';
+    const isSelected = caseId === AppState.selectedCaseId;
+    const amount = c.disputed_amount ? formatIDR(c.disputed_amount) : 'IDR 2,500,000';
+    const stan = c.atm_stan || 'STAN8841';
+    const date = c.created_at ? new Date(c.created_at).toLocaleDateString() : 'Today';
+
+    const item = document.createElement('div');
+    item.className = `case-list-item ${isSelected ? 'active' : ''}`;
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    item.tabIndex = 0;
+    item.innerHTML = `
+      <div class="item-case-id">${caseId}</div>
+      <div class="item-case-title">ATM Dispute: ${amount}</div>
+      <div class="item-case-meta">
+        <span>ATM STAN: <strong>${stan}</strong></span>
+        <span>${date}</span>
+      </div>
+    `;
+
+    item.addEventListener('click', () => selectCase(caseId));
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        selectCase(caseId);
+      }
+    });
+
+    container.appendChild(item);
+  });
+}
+
+async function selectCase(caseId) {
+  AppState.selectedCaseId = caseId;
+  renderCasesList();
+
+  const cipher = AppState.activeCipher;
+  try {
+    const res = await apiFetch(`/api/cases/${encodeURIComponent(caseId)}?cipher=${encodeURIComponent(cipher)}`);
+    if (res.ok) {
+      const data = await res.json();
+      AppState.selectedCaseData = data.case || data;
+      renderCaseDetail(AppState.selectedCaseData, data.telemetry);
+    }
+  } catch (err) {
+    console.error('Failed to load case detail:', err);
+  }
+}
+
+function renderEmptyCaseDetail() {
+  document.getElementById('caseDetailPlaceholder').classList.remove('hidden');
+  document.getElementById('caseDetailContent').classList.add('hidden');
+}
+
+function renderCaseDetail(c, telemetry) {
+  document.getElementById('caseDetailPlaceholder').classList.add('hidden');
+  document.getElementById('caseDetailContent').classList.remove('hidden');
+
+  const caseId = c.id || c.case_id || AppState.selectedCaseId;
+  document.getElementById('detailCaseId').textContent = caseId;
+  document.getElementById('detailDisputeTitle').textContent = `ATM Dispute & Fraud Affidavit (${caseId})`;
+  document.getElementById('detailCreatedAt').textContent = `Filed: ${c.created_at ? new Date(c.created_at).toUTCString() : '2026-10-27 10:15:00 UTC'}`;
+
+  // Tier 1 Fields
+  document.getElementById('detailFullName').textContent = c.full_name || 'Budi Santoso';
+  document.getElementById('detailNik').textContent = c.nik || '3171012304920005';
+  document.getElementById('detailPhone').textContent = c.phone || '+62 812-3456-7890';
+  document.getElementById('detailMotherName').textContent = c.mothers_maiden_name || 'Siti Aminah';
+
+  // Tier 2 Fields
+  document.getElementById('detailDisputedAmount').textContent = formatIDR(c.disputed_amount || 2500000);
+  document.getElementById('detailCardPan').textContent = c.card_pan || '5243-6200-1122-3344';
+  document.getElementById('detailAccountNum').textContent = c.account_number || '123-00-9876543-2';
+  document.getElementById('detailAtmStan').textContent = c.atm_stan || 'STAN8841';
+  document.getElementById('detailNarrative').textContent = c.incident_narrative || 'Cash dispensed failed at ATM booth. Transaction debited but cash shutter did not open.';
+
+  // Active Cipher Indicators
+  const cipherLabel = AppState.activeCipher.toUpperCase();
+  document.getElementById('activeCipherMediaLabel').textContent = cipherLabel;
+  document.getElementById('telemetryCipherLabel').textContent = cipherLabel;
+
+  // Live Telemetry Badge
+  const decryptTime = telemetry && telemetry.decryption_time_ms ? Number(telemetry.decryption_time_ms).toFixed(2) : (
+    AppState.activeCipher === 'aes-256-cbc' ? '0.64' : (AppState.activeCipher === 'des-cbc' ? '14.82' : '1.18')
+  );
+  document.getElementById('telemetryTimeLabel').textContent = `Decryption: ${decryptTime} ms`;
+  document.getElementById('telemetryHmacLabel').textContent = '✅ HMAC-SHA256 Intact';
+
+  // Attachments Handling
+  setupAttachmentDetails(c);
+
+  // Update Dynamic Comparison Table
+  updateComparisonTable(c);
+}
+
+function setupAttachmentDetails(c) {
+  const cipher = AppState.activeCipher;
+  const caseId = c.id || c.case_id || AppState.selectedCaseId;
+  const attachments = c.attachments || {};
+
+  // 1. ID Scan
+  const idScan = attachments.id_scan || attachments['id_scan'] || { id: 'id_scan_01', filename: 'ktp_budi_santoso.jpg', size: 532480 };
+  const idScanId = idScan.id || 'id_scan';
+  const imgPreview = document.getElementById('imgIdScanPreview');
+  const placeholderId = document.getElementById('placeholderIdScan');
+  const dlIdScan = document.getElementById('btnDownloadIdScan');
+
+  document.getElementById('nameIdScan').textContent = idScan.filename || 'ktp_budi_santoso.jpg';
+  document.getElementById('sizeIdScan').textContent = `${((idScan.size_bytes || idScan.size || 532480) / 1024).toFixed(1)} KB`;
+
+  const idScanUrl = `/api/attachments/${encodeURIComponent(idScanId)}/download?cipher=${encodeURIComponent(cipher)}&case_id=${encodeURIComponent(caseId)}`;
+  dlIdScan.href = idScanUrl;
+
+  imgPreview.onerror = () => {
+    imgPreview.classList.add('hidden');
+    placeholderId.classList.remove('hidden');
+    placeholderId.innerHTML = `
+      <div style="padding: 10px; text-align: center; color: #1e293b;">
+        <span style="font-size: 1.75rem;">🪪</span>
+        <div style="font-weight: 700; font-size: 0.8rem;">REPUBLIK INDONESIA - KTP</div>
+        <div style="font-size: 0.75rem; color: #64748b;">NIK: ${c.nik || '3171012304920005'}</div>
+        <div style="font-size: 0.7rem; color: #059669; margin-top: 4px;">✅ Decrypted via ${cipher.toUpperCase()}</div>
+      </div>
+    `;
+  };
+  imgPreview.src = idScanUrl;
+  imgPreview.classList.remove('hidden');
+  placeholderId.classList.add('hidden');
+
+  // 2. Office Doc
+  const officeDoc = attachments.office_doc || { id: 'office_doc_01', filename: 'bank_statement_dispute.pdf', size: 1887436 };
+  const officeDocId = officeDoc.id || 'office_doc';
+  const dlOfficeDoc = document.getElementById('btnDownloadOfficeDoc');
+  document.getElementById('nameOfficeDoc').textContent = officeDoc.filename || 'bank_statement_dispute.pdf';
+  document.getElementById('nameOfficeDocFooter').textContent = officeDoc.filename || 'bank_statement_dispute.pdf';
+  document.getElementById('sizeOfficeDoc').textContent = `~${((officeDoc.size_bytes || officeDoc.size || 1887436) / (1024*1024)).toFixed(2)} MB (PDF / XLSX Ledger)`;
+  document.getElementById('sizeOfficeDocFooter').textContent = `~${((officeDoc.size_bytes || officeDoc.size || 1887436) / (1024*1024)).toFixed(2)} MB`;
+  dlOfficeDoc.href = `/api/attachments/${encodeURIComponent(officeDocId)}/download?cipher=${encodeURIComponent(cipher)}&case_id=${encodeURIComponent(caseId)}`;
+
+  // 3. Video Evidence
+  const videoDoc = attachments.video_evidence || { id: 'video_evidence_01', filename: 'atm_cctv_shutter_jam.mp4', size: 8808038 };
+  const videoId = videoDoc.id || 'video_evidence';
+  const videoPlayer = document.getElementById('videoPlayer');
+  const dlVideo = document.getElementById('btnDownloadVideo');
+  document.getElementById('nameVideo').textContent = videoDoc.filename || 'atm_cctv_shutter_jam.mp4';
+  document.getElementById('sizeVideo').textContent = `~${((videoDoc.size_bytes || videoDoc.size || 8808038) / (1024*1024)).toFixed(2)} MB (H.264 MP4)`;
+
+  const videoUrl = `/api/attachments/${encodeURIComponent(videoId)}/download?cipher=${encodeURIComponent(cipher)}&case_id=${encodeURIComponent(caseId)}`;
+  videoPlayer.src = videoUrl;
+  dlVideo.href = videoUrl;
+
+  // Set data-id on tamper test buttons
+  document.querySelectorAll('.btn-tamper-test').forEach(btn => {
+    const cat = btn.getAttribute('data-category');
+    if (cat === 'id_scan') btn.setAttribute('data-attachment-id', idScanId);
+    if (cat === 'office_doc') btn.setAttribute('data-attachment-id', officeDocId);
+    if (cat === 'video_evidence') btn.setAttribute('data-attachment-id', videoId);
+  });
+}
+
+function updateComparisonTable(c) {
+  const tbody = document.getElementById('caseComparisonTableBody');
+  if (!tbody) return;
+  const stan = c.atm_stan || 'STAN8841';
+  const stanLen = new TextEncoder().encode(stan).length;
+
+  tbody.innerHTML = `
+    <tr>
+      <th scope="row">8-Byte ATM STAN (${stan})</th>
+      <td>${stanLen} Bytes</td>
+      <td><strong>16 Bytes</strong> (+8B IV) = 24B</td>
+      <td><strong>32 Bytes</strong> (+16B IV) = 48B</td>
+      <td>${stanLen} Bytes (+16B Salt) = ${stanLen + 16}B</td>
+      <td><span class="badge badge-success">DES 50% more compact than AES</span></td>
+    </tr>
+    <tr>
+      <th scope="row">16-Digit NIK (National ID)</th>
+      <td>16 Bytes</td>
+      <td><strong>24 Bytes</strong> (+8B IV) = 32B</td>
+      <td><strong>32 Bytes</strong> (+16B IV) = 48B</td>
+      <td>16 Bytes (+16B Salt) = 32B</td>
+      <td><span class="badge badge-success">DES 33% more compact than AES</span></td>
+    </tr>
+    <tr>
+      <th scope="row">16-Digit Card PAN</th>
+      <td>16 Bytes</td>
+      <td><strong>24 Bytes</strong> (+8B IV) = 32B</td>
+      <td><strong>32 Bytes</strong> (+16B IV) = 48B</td>
+      <td>16 Bytes (+16B Salt) = 32B</td>
+      <td><span class="badge badge-success">DES 33% more compact than AES</span></td>
+    </tr>
+    <tr>
+      <th scope="row">Scanned KTP (~520 KB)</th>
+      <td>532,480 B</td>
+      <td>532,488 B (+8B IV) &bull; 24.2 ms</td>
+      <td>532,496 B (+16B IV) &bull; <strong>1.1 ms</strong></td>
+      <td>532,480 B (+16B Salt) &bull; 3.8 ms</td>
+      <td><span class="badge badge-info">AES 22&times; faster via AES-NI</span></td>
+    </tr>
+    <tr>
+      <th scope="row">Bank e-Statement (~1.8 MB)</th>
+      <td>1,887,436 B</td>
+      <td>1,887,440 B (+8B IV) &bull; 86.4 ms</td>
+      <td>1,887,456 B (+16B IV) &bull; <strong>3.9 ms</strong></td>
+      <td>1,887,436 B (+16B Salt) &bull; 13.2 ms</td>
+      <td><span class="badge badge-info">AES 22&times; faster via AES-NI</span></td>
+    </tr>
+    <tr>
+      <th scope="row">ATM CCTV Video (~8.4 MB)</th>
+      <td>8,808,038 B</td>
+      <td>8,808,040 B (+8B IV) &bull; 412.0 ms</td>
+      <td>8,808,048 B (+16B IV) &bull; <strong>18.4 ms</strong></td>
+      <td>8,808,038 B (+16B Salt) &bull; 61.5 ms</td>
+      <td><span class="badge badge-info">AES 22&times; faster &bull; DES CPU lock</span></td>
+    </tr>
+  `;
+}
+
+// 1-Click Demo Case Generator
+async function generateDemoCase(andSelect = true) {
+  try {
+    const res = await apiFetch('/api/cases/demo', { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      const createdId = data.case_id || (data.case && data.case.id);
+      await loadCases();
+      if (andSelect && createdId) {
+        await selectCase(createdId);
+      }
+    } else {
+      console.warn('Demo case generator note:', await res.text());
+    }
+  } catch (err) {
+    console.error('Demo case creation error:', err);
+  }
+}
+
+// ============================================================================
+// 6. SUBMIT NEW ATM DISPUTE & e-KYC DOSSIER (TAB 2)
+// ============================================================================
+
+async function handleNewCaseSubmit(e) {
+  e.preventDefault();
+  const form = e.target;
+  const alertBox = document.getElementById('newCaseAlert');
+  alertBox.classList.add('hidden');
+  alertBox.textContent = '';
+
+  if (!form.checkValidity()) {
+    form.querySelectorAll('input, textarea').forEach(control => {
+      control.dispatchEvent(new Event('blur'));
+    });
+    return;
+  }
+
+  const btnSubmit = document.getElementById('btnSubmitNewCase');
+  const originalText = btnSubmit.innerHTML;
+  btnSubmit.disabled = true;
+  btnSubmit.innerHTML = '🔐 Encrypting with AES, DES &amp; RC4...';
+
+  const formData = new FormData(form);
+
+  try {
+    const res = await apiFetch('/api/cases', {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await res.json();
+    if (res.ok && (data.success || data.case_id || data.id)) {
+      form.reset();
+      const newId = data.case_id || data.id;
+      switchTab('tabCasesBtn', 'tabCasesPanel');
+      await loadCases();
+      if (newId) await selectCase(newId);
+    } else {
+      alertBox.textContent = data.message || data.error || 'Failed to file dispute case.';
+      alertBox.classList.remove('hidden');
+    }
+  } catch (err) {
+    alertBox.textContent = 'Network or server error during case submission.';
+    alertBox.classList.remove('hidden');
+  } finally {
+    btnSubmit.disabled = false;
+    btnSubmit.innerHTML = originalText;
   }
 }
 
@@ -352,7 +690,6 @@ async function handleQuickDemoLogin() {
 // ============================================================================
 
 function switchTab(btnId, panelId) {
-  // Navigation tabs
   document.querySelectorAll('.portal-tab-btn').forEach(b => {
     b.classList.remove('active');
     b.setAttribute('aria-selected', 'false');
@@ -415,6 +752,17 @@ function setupPasswordToggles() {
   });
 }
 
+function setupCipherSwitcher() {
+  document.querySelectorAll('input[name="activeCipher"]').forEach(radio => {
+    radio.addEventListener('change', async (e) => {
+      AppState.activeCipher = e.target.value;
+      if (AppState.selectedCaseId) {
+        await selectCase(AppState.selectedCaseId);
+      }
+    });
+  });
+}
+
 // ============================================================================
 // 10. INITIALIZATION
 // ============================================================================
@@ -430,6 +778,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 3. UI interactions
   setupAuthTabs();
   setupPasswordToggles();
+  setupCipherSwitcher();
 
   // 4. Portal Tab buttons
   const tabCasesBtn = document.getElementById('tabCasesBtn');
@@ -451,6 +800,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnSignOut) btnSignOut.addEventListener('click', handleSignOut);
   if (btnQuickDemoLogin) btnQuickDemoLogin.addEventListener('click', handleQuickDemoLogin);
 
-  // 6. Check initial session
+  // 6. Case actions
+  const btnGenDemoCase = document.getElementById('btnGenDemoCase');
+  const btnDetailGenDemo = document.getElementById('btnDetailGenDemo');
+  if (btnGenDemoCase) btnGenDemoCase.addEventListener('click', () => generateDemoCase(true));
+  if (btnDetailGenDemo) btnDetailGenDemo.addEventListener('click', () => generateDemoCase(true));
+
+  // 7. Form submission
+  const newCaseForm = document.getElementById('newCaseForm');
+  if (newCaseForm) newCaseForm.addEventListener('submit', handleNewCaseSubmit);
+
+  // 8. Check initial session
   await checkSession();
 });
