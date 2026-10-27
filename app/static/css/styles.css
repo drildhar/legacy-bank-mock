@@ -1,4 +1,4 @@
-﻿/* ==========================================================================
+/* ==========================================================================
    BANK NUSANTARA - ATM DISPUTE, FRAUD & e-KYC CUSTOMER VAULT
    CSS Stylesheet
    Modern Web Guidance Compliant:
@@ -1815,12 +1815,109 @@ dialog::backdrop {
   justify-content: flex-end;
 }
 
+/* Raw Vault Tabs & Code Block */
+.raw-vault-tabs {
+  display: flex;
+  flex-direction: column;
+}
 
-.dialog-placeholder {
-  padding: 1.5rem;
-  text-align: center;
+.raw-tab-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.raw-tab-btn {
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: #f8fafc;
   color: var(--color-text-muted);
-  background: #f8fafc;
-  border: 1px dashed var(--color-border);
+  cursor: pointer;
+}
+
+.raw-tab-btn.active {
+  background-color: var(--color-primary);
+  color: #ffffff;
+  border-color: var(--color-primary);
+}
+
+.raw-code-block {
+  background-color: #0f172a;
+  color: #38bdf8;
+  padding: 1rem;
   border-radius: var(--radius-md);
+  font-family: monospace;
+  font-size: 0.775rem;
+  overflow-x: auto;
+  max-height: 400px;
+  line-height: 1.45;
+}
+
+/* Tamper Dialog Specifics */
+.tamper-status-box {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background-color: var(--color-danger-bg);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  margin-bottom: 1.25rem;
+}
+
+.tamper-icon {
+  font-size: 2rem;
+}
+
+.tamper-summary strong {
+  display: block;
+  color: var(--color-danger);
+  font-size: 1rem;
+}
+
+.tamper-summary p {
+  color: #991b1b;
+  font-size: 0.825rem;
+}
+
+.tamper-details-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: #f8fafc;
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  margin-bottom: 1.25rem;
+}
+
+.tamper-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.825rem;
+}
+
+.tamper-detail-row span {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.tamper-detail-row code {
+  font-size: 0.775rem;
+}
+
+.outcome-row {
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--color-border);
+  margin-top: 0.25rem;
+}
+
+.tamper-conclusion-text {
+  font-size: 0.825rem;
+  color: var(--color-text-muted);
+  line-height: 1.4;
 }

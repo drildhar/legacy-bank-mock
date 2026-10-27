@@ -1177,8 +1177,20 @@
           Verification of <strong>Zero-Plaintext-at-Rest</strong>: The database persistence layer stores exclusively 
           non-identifying Tier 0 routing metadata alongside encrypted ciphertexts, IVs, salts, and HMAC tags.
         </p>
-        <div class="dialog-placeholder">
-          <p>Database and storage blob raw cryptographic dumps will be inspected here.</p>
+
+        <div class="raw-vault-tabs">
+          <div class="raw-tab-controls" role="tablist">
+            <button type="button" class="raw-tab-btn active" data-raw-target="rawDbView">SQLite Row (Personal &amp; Financial Fields)</button>
+            <button type="button" class="raw-tab-btn" data-raw-target="rawBlobView">Filesystem Blobs (Encrypted Media Vault)</button>
+          </div>
+
+          <div id="rawDbView" class="raw-tab-panel active">
+            <pre class="raw-code-block"><code id="rawDbOutput">Loading raw database record...</code></pre>
+          </div>
+
+          <div id="rawBlobView" class="raw-tab-panel hidden">
+            <pre class="raw-code-block"><code id="rawBlobOutput">Loading storage manifest...</code></pre>
+          </div>
         </div>
       </div>
       <div class="dialog-footer">
@@ -1203,6 +1215,37 @@
           <div class="tamper-summary">
             <strong id="tamperSummaryTitle">Integrity Verification Triggered</strong>
             <p id="tamperSummaryText">Simulating 1-bit memory corruption on ciphertext before decryption...</p>
+          </div>
+        </div>
+
+        <div class="tamper-details-list">
+          <div class="tamper-detail-row">
+            <span>Target Payload:</span>
+            <strong id="tamperTargetPayload">Scanned KTP Document (id_scan)</strong>
+          </div>
+          <div class="tamper-detail-row">
+            <span>Cipher Tested:</span>
+            <code id="tamperCipher">AES-256-CBC</code>
+          </div>
+          <div class="tamper-detail-row">
+            <span>Tamper Action:</span>
+            <code>XOR 0x01 at Byte Offset 64 (Ciphertext)</code>
+          </div>
+          <div class="tamper-detail-row">
+            <span>Integrity Check Mechanism:</span>
+            <strong>Encrypt-then-MAC (HMAC-SHA256)</strong>
+          </div>
+          <div class="tamper-detail-row">
+            <span>Stored Record HMAC:</span>
+            <code id="tamperExpectedHmac">e3b0c44298fc1c149afbf4c8996fb924...</code>
+          </div>
+          <div class="tamper-detail-row">
+            <span>Computed Tampered HMAC:</span>
+            <code id="tamperCalculatedHmac" class="text-danger">7f83b1657ff1fc53b92dc18148a1d65d...</code>
+          </div>
+          <div class="tamper-detail-row outcome-row">
+            <span>Bank Security Outcome:</span>
+            <span class="badge badge-success" id="tamperOutcomeBadge">Decryption Safely Aborted &bull; Tampering Refused</span>
           </div>
         </div>
 
