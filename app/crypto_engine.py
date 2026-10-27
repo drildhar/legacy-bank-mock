@@ -455,7 +455,182 @@ def decrypt_aes_gcm(
     return plaintext, round(elapsed_ms, 4)
 
 
+def encrypt_field_tri(
+    plaintext_str: str,
+    dek_bundle: Dict[str, Any],
+    aad: bytes = b""
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Encrypts a sensitive customer or ATM text field (e.g., NIK, PAN, STAN)
+    concurrently through AES-256-CBC, DES-CBC, and RC4.
+    """
+    pt_bytes = plaintext_str.encode("utf-8")
+    aes_res = encrypt_aes(pt_bytes, dek_bundle["aes_key"], dek_bundle["hmac_key"], aad=aad)
+    des_res = encrypt_des(pt_bytes, dek_bundle["des_key"], dek_bundle["hmac_key"], aad=aad)
+    rc4_res = encrypt_rc4(pt_bytes, dek_bundle["rc4_key"], dek_bundle["hmac_key"], aad=aad)
+
+    return {
+        "aes": aes_res,
+        "des": des_res,
+        "rc4": rc4_res
+    }
 
 
-# TODO: Add high-level field and vault file helpers
+def decrypt_field_tri(
+    enc_field_dict: Dict[str, Any],
+    dek_bundle: Dict[str, Any],
+    cipher_choice: str = "aes",
+    aad: bytes = b""
+) -> Tuple[str, float]:
+    """
+    Decrypts an encrypted field dictionary using the customer's specified cipher:
+    'aes', 'des', or 'rc4'.
+
+    Returns:
+        (decrypted_text_string, decrypt_ms)
+    """
+    choice = cipher_choice.lower().strip()
+    if choice in ("aes", "aes_cbc", "aes-cbc", "aes-256", "aes-256-cbc"):
+        pt_bytes, dec_ms = decrypt_aes(enc_field_dict["aes"], dek_bundle["aes_key"], dek_bundle["hmac_key"], aad=aad)
+    elif choice in ("des", "des_cbc", "des-cbc"):
+        pt_bytes, dec_ms = decrypt_des(enc_field_dict["des"], dek_bundle["des_key"], dek_bundle["hmac_key"], aad=aad)
+    elif choice in ("rc4", "rc4_stream", "rc4-stream"):
+        pt_bytes, dec_ms = decrypt_rc4(enc_field_dict["rc4"], dek_bundle["rc4_key"], dek_bundle["hmac_key"], aad=aad)
+    elif choice in ("gcm", "aes_gcm", "aes-gcm", "aes-256-gcm"):
+        pt_bytes, dec_ms = decrypt_aes_gcm(enc_field_dict["gcm"], dek_bundle["aes_key"], aad=aad)
+    else:
+        raise ValueError(f"Unsupported cipher choice: {cipher_choice}. Expected 'aes', 'des', or 'rc4'.")
+
+    return pt_bytes.decode("utf-8"), dec_ms
+
+
+def encrypt_bytes_tri(
+    plaintext: bytes,
+    dek_bundle: Dict[str, Any],
+    aad: bytes = b""
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Encrypts binary file bytes (KTP scan, PDF e-Statement, or CCTV video) with AES, DES, and RC4.
+    Returns raw ciphertext bytes alongside metadata for persistence to disk.
+    """
+    aes_res = encrypt_aes(plaintext, dek_bundle["aes_key"], dek_bundle["hmac_key"], aad=aad)
+    des_res = encrypt_des(plaintext, dek_bundle["des_key"], dek_bundle["hmac_key"], aad=aad)
+    rc4_res = encrypt_rc4(plaintext, dek_bundle["rc4_key"], dek_bundle["hmac_key"], aad=aad)
+
+    aes_ct = base64.b64decode(aes_res.pop("ciphertext_b64"))
+    des_ct = base64.b64decode(des_res.pop("ciphertext_b64"))
+    rc4_ct = base64.b64decode(rc4_res.pop("ciphertext_b64"))
+
+    aes_entry = {
+        "ciphertext_bytes": aes_ct,
+        "meta": aes_res,
+        "metadata": aes_res,
+        **aes_res
+    }
+    des_entry = {
+        "ciphertext_bytes": des_ct,
+        "meta": des_res,
+        "metadata": des_res,
+        **des_res
+    }
+    rc4_entry = {
+        "ciphertext_bytes": rc4_ct,
+        "meta": rc4_res,
+        "metadata": rc4_res,
+        **rc4_res
+    }
+
+    return {
+        "aes": aes_entry,
+        "des": des_entry,
+        "rc4": rc4_entry
+    }
+
+
+def decrypt_bytes_single(
+    ciphertext: bytes,
+    meta: Dict[str, Any],
+    dek_bundle: Dict[str, Any],
+    cipher_choice: str,
+    aad: bytes = b""
+) -> Tuple[bytes, float]:
+    """
+    Verifies HMAC and decrypts raw ciphertext bytes from disk for 'aes', 'des', or 'rc4'.
+    Operates directly on binary buffers in memory without redundant base64 re-encoding.
+    """
+    # Handle wrapped metadata structures
+    if "meta" in meta and isinstance(meta["meta"], dict):
+        meta = meta["meta"]
+    elif "metadata" in meta and isinstance(meta["metadata"], dict):
+        meta = meta["metadata"]
+
+    choice = cipher_choice.lower().strip()
+    hmac_key = _coerce_bytes(dek_bundle["hmac_key"])
+
+    if choice in ("aes", "aes_cbc", "aes-cbc", "aes-256", "aes-256-cbc"):
+        aes_key = _coerce_bytes(dek_bundle["aes_key"])
+        iv = base64.b64decode(meta["iv_b64"])
+        mac = base64.b64decode(meta["hmac_b64"])
+
+        t0 = time.perf_counter_ns()
+        expected_mac = hmac.new(hmac_key, iv + ciphertext + aad, hashlib.sha256).digest()
+        if not hmac.compare_digest(mac, expected_mac):
+            raise ValueError("AES Integrity Check Failed: HMAC mismatch (ciphertext or AAD tampered)")
+
+        cipher = AES.new(aes_key, AES.MODE_CBC, iv=iv)
+        plaintext = unpad(cipher.decrypt(ciphertext), 16)
+        elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+        return plaintext, round(elapsed_ms, 4)
+
+    elif choice in ("des", "des_cbc", "des-cbc"):
+        des_key = _coerce_bytes(dek_bundle["des_key"])
+        iv = base64.b64decode(meta["iv_b64"])
+        mac = base64.b64decode(meta["hmac_b64"])
+
+        t0 = time.perf_counter_ns()
+        expected_mac = hmac.new(hmac_key, iv + ciphertext + aad, hashlib.sha256).digest()
+        if not hmac.compare_digest(mac, expected_mac):
+            raise ValueError("DES Integrity Check Failed: HMAC mismatch")
+
+        cipher = DES.new(des_key, DES.MODE_CBC, iv=iv)
+        plaintext = unpad(cipher.decrypt(ciphertext), 8)
+        elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+        return plaintext, round(elapsed_ms, 4)
+
+    elif choice in ("rc4", "rc4_stream", "rc4-stream"):
+        rc4_key = _coerce_bytes(dek_bundle["rc4_key"])
+        salt = base64.b64decode(meta["iv_b64"])
+        mac = base64.b64decode(meta["hmac_b64"])
+
+        t0 = time.perf_counter_ns()
+        expected_mac = hmac.new(hmac_key, salt + ciphertext + aad, hashlib.sha256).digest()
+        if not hmac.compare_digest(mac, expected_mac):
+            raise ValueError("RC4 Integrity Check Failed: HMAC mismatch")
+
+        frame_key = hmac.new(rc4_key, b"RC4-FRAME-KEY:" + salt, hashlib.sha256).digest()
+        cipher = ARC4.new(frame_key, drop=768)
+        plaintext = cipher.decrypt(ciphertext)
+        elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+        return plaintext, round(elapsed_ms, 4)
+
+    elif choice in ("gcm", "aes_gcm", "aes-gcm", "aes-256-gcm"):
+        aes_key = _coerce_bytes(dek_bundle["aes_key"])
+        nonce = base64.b64decode(meta.get("nonce_b64") or meta["iv_b64"])
+        tag = base64.b64decode(meta.get("tag_b64") or meta["hmac_b64"])
+
+        t0 = time.perf_counter_ns()
+        cipher = AES.new(aes_key, AES.MODE_GCM, nonce=nonce)
+        if aad:
+            cipher.update(aad)
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+        elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+        return plaintext, round(elapsed_ms, 4)
+
+    else:
+        raise ValueError(f"Unsupported cipher choice: {cipher_choice}. Expected 'aes', 'des', or 'rc4'.")
+
+
+
+
+# TODO: Add video scrubbing simulation for random-access benchmarking
 
