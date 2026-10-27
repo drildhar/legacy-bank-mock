@@ -1,0 +1,12 @@
+# Normalize text files (the repository was initialised with a UTF-16 README)
+* text=auto eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.txt text eol=lf
+
+# Keep historical README revisions diffable as text instead of "Binary files differ"
+README.md diff
+
+# Ciphertext evidence blobs are binary by nature
+*.enc binary
+*.db binary
