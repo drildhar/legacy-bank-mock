@@ -50,10 +50,12 @@ from app.database import (
     get_attachments_by_case,
     get_case_by_id,
     get_cases_by_user,
+    get_latest_benchmark_run,
     get_user_by_email,
     get_user_by_username,
     get_vault_path,
     init_db,
+    save_benchmark_run,
 )
 from app.crypto_engine import (
     decrypt_bytes_single,
@@ -66,6 +68,7 @@ from app.crypto_engine import (
     verify_password,
     wrap_dek_bundle,
 )
+from app.benchmark import run_full_benchmark_suite
 
 
 # =====================================================================
@@ -1415,6 +1418,37 @@ def create_app() -> Flask:
                 "is refused before any decryption occurs."
             )
         }), 200
+
+    # -----------------------------------------------------------------
+    # Benchmark Evaluation API Routes
+    # -----------------------------------------------------------------
+    @app.route("/api/benchmarks/run", methods=["POST"])
+    def api_run_benchmarks():
+        """
+        Executes the full benchmark evaluation suite (5 iterations with warmup)
+        comparing AES-256-CBC, DES-CBC, and RC4 across short banking fields,
+        the 4 mandatory scenario payloads, and random-access video scrubbing.
+        Persists results into benchmark_runs table.
+        """
+        results = run_full_benchmark_suite(iterations=5)
+        saved = save_benchmark_run(results)
+        return jsonify({
+            "id": saved["id"],
+            "created_at": saved["created_at"],
+            "results": results,
+            **results
+        }), 200
+
+    @app.route("/api/benchmarks/latest", methods=["GET"])
+    def api_get_latest_benchmark():
+        """Retrieves the most recent benchmark evaluation run, executing one if none exists."""
+        run = get_latest_benchmark_run()
+        if not run:
+            results = run_full_benchmark_suite(iterations=5)
+            saved = save_benchmark_run(results)
+            run = saved
+        return jsonify(run["results"]), 200
+
     return app
 
 
